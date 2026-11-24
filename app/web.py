@@ -9,8 +9,10 @@ from typing import Dict, List, Optional, Tuple
 from flask import (Flask, Response, abort, flash, redirect, render_template,
                    request, url_for)
 
-from . import csvutil, db
+from . import alignment, csvutil, db
+from .alignment import SheetError
 from .csvutil import CSVParseError, TEMP_MAX, TEMP_MIN
+from .db import AlignmentConfirmError
 from .quadtree import is_power_of_two
 
 
@@ -59,10 +61,12 @@ def create_app(db_path: Optional[str] = None) -> Flask:
                 grid_rows.append(row)
             # 预览视图内可见的块（左上角落在预览区）
             view_blocks = [b for b in blocks if b.row < view_n and b.col < view_n]
+            align_preview = db.load_alignment_preview(c)
             return render_template(
                 "index.html", grid=grid, stats=stats, batch=batch,
                 grid_rows=grid_rows, view_n=view_n, show_full=show_full,
                 blocks=view_blocks, total_blocks=len(blocks), n=n,
+                align_preview=align_preview, cells_map=cells,
             )
         finally:
             c.close()
@@ -160,6 +164,99 @@ def create_app(db_path: Optional[str] = None) -> Flask:
                 f"改动 {metrics['changed_cells']} 格；仅重算包含改动格的节点 "
                 f"{metrics['nodes_recomputed']} 个，块增 {metrics['blocks_added']} / "
                 f"删 {metrics['blocks_removed']}", "ok")
+        return redirect(url_for("index"))
+
+    # ------------------- 热像仪补测表对位 -------------------
+    @app.route("/alignment/preview", methods=["POST"])
+    def alignment_preview():
+        """上传补测表并在搜索区内对位；唯一落点才生成预览，否则只说明原因。"""
+        f = request.files.get("sheet")
+        if f is None or f.filename == "":
+            flash("请选择热像仪补测表 CSV（局部行, 局部列, 温度, 用途）", "error")
+            return redirect(url_for("index"))
+        try:
+            r1, r2, c1, c2 = _parse_range(request.form)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("index"))
+
+        c = conn()
+        try:
+            grid = db.get_grid(c)
+            if grid is None:
+                flash("请先上传方阵 CSV 底图", "error")
+                return redirect(url_for("index"))
+            n = grid["side"]
+            try:
+                region = alignment.validate_region((r1 - 1, r2 - 1, c1 - 1, c2 - 1), n)
+            except SheetError as exc:
+                flash(f"搜索区有误，未做对位：{exc}", "error")
+                return redirect(url_for("index"))
+            raw = f.read()
+            try:
+                points = csvutil.parse_alignment_csv(raw)
+            except SheetError as exc:
+                flash(f"补测表解析失败，未生成预览：{exc}", "error")
+                return redirect(url_for("index"))
+
+            cells = db.load_cells(c)
+            result = alignment.solve(points, region, cells)
+            if result.status == "none":
+                flash(result.no_solution_reason, "error")
+                return redirect(url_for("index"))
+            if result.status == "ambiguous":
+                flash(
+                    f"存在多组可行摆法（{len(result.placements)} 种摆法、"
+                    f"{result.distinct_fill_count} 组不同的补测落点），"
+                    "按规则不得预览；请缩小搜索区、增加参照点或核对补测表后重试",
+                    "error")
+                return redirect(url_for("index"))
+
+            db.save_alignment_preview(c, region, result, raw, f.filename)
+        except Exception:
+            app.logger.exception("alignment preview failed")
+            flash("对位预览失败，已回滚，既有数据与预览不变", "error")
+            return redirect(url_for("index"))
+        finally:
+            c.close()
+        flash(
+            f"对位成功：{len(result.placements)} 种可行摆法均给出同一组补测落点，"
+            f"共 {len(result.fill_landings)} 个补测点（参照点 "
+            f"{len(result.ref_landings)} 个已与实测吻合）；落点见下方预览，"
+            "确认前不会写入任何读数", "ok")
+        return redirect(url_for("index"))
+
+    @app.route("/alignment/confirm", methods=["POST"])
+    def alignment_confirm():
+        """用最新实测重核预览；通过则整批填入并更新供数块，否则回滚并提示重试。"""
+        c = conn()
+        try:
+            try:
+                metrics = db.confirm_alignment_preview(c)
+            except AlignmentConfirmError as exc:
+                flash(f"{exc}；读数与供数块均未改动", "error")
+                return redirect(url_for("index"))
+            except Exception:
+                app.logger.exception("alignment confirm failed")
+                flash("对位确认失败，已回滚，读数与供数块均未改动", "error")
+                return redirect(url_for("index"))
+        finally:
+            c.close()
+        flash(
+            f"重核通过，整批填入补测 {metrics['filled_cells']} 格；"
+            f"重算节点 {metrics['nodes_recomputed']} 个，现行供数块增 "
+            f"{metrics['blocks_added']} / 删 {metrics['blocks_removed']}", "ok")
+        return redirect(url_for("index"))
+
+    @app.route("/alignment/cancel", methods=["POST"])
+    def alignment_cancel():
+        c = conn()
+        try:
+            existed = db.cancel_alignment_preview(c)
+        finally:
+            c.close()
+        flash("已放弃当前对位预览，未写入任何读数" if existed
+              else "当前没有可放弃的对位预览", "ok" if existed else "error")
         return redirect(url_for("index"))
 
     # --------------------------- 温差 ---------------------------

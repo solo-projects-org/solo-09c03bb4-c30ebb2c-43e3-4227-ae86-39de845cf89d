@@ -15,6 +15,8 @@ import io
 from typing import List, Optional, Tuple
 
 from .quadtree import is_power_of_two
+from .alignment import (FILL_TOKENS, MAX_SHEET_POINTS, REF_TOKENS,
+                        SheetError, SheetPoint)
 
 TEMP_MIN = -100          # 摄氏度，工艺合理下限
 TEMP_MAX = 3000          # 摄氏度，工艺合理上限
@@ -120,3 +122,94 @@ def iter_blocks_csv(blocks, n: int):
             b.tmax, b.tmin, b.count, n,
         ])
         yield buf.getvalue()
+
+
+# ----------------------- 热像仪补测表 CSV -----------------------
+#
+# 固定四列：local_row, local_col, temp, purpose
+# （局部行、局部列均为 1 基正整数；温度为整数摄氏度；
+#   purpose 为“参照/补测”类标记，中英文均可，见 alignment.REF_TOKENS）
+ALIGN_HEADER_TOKENS = {"local_row", "row", "r", "行", "行号", "局部行"}
+
+
+def parse_alignment_csv(raw: bytes) -> List[SheetPoint]:
+    """
+    解析热像仪补测表，返回 SheetPoint 列表。
+
+    规则：
+    - 恰好 4 列：局部行、局部列、整数温度、用途；
+    - 局部行列必须是 >=1 的整数（补测表自身的 1 基编号）；
+    - 温度为 [TEMP_MIN, TEMP_MAX] 内整数；
+    - 用途只接受参照/补测两类标记；
+    - 同一 (局部行, 局部列) 不得重复；至少要有一个补测点。
+    """
+    if not raw or not raw.strip():
+        raise SheetError("补测表文件为空")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = raw.decode("gbk")
+        except UnicodeDecodeError:
+            raise SheetError("文件编码无法识别，请使用 UTF-8 或 GBK 编码的 CSV")
+
+    reader = csv.reader(io.StringIO(text))
+    rows = [row for row in reader]
+    while rows and all((cell is None or cell.strip() == "") for cell in rows[-1]):
+        rows.pop()
+    if not rows:
+        raise SheetError("补测表中没有数据行")
+
+    first = rows[0]
+    if first and first[0].strip().lower() in ALIGN_HEADER_TOKENS:
+        rows = rows[1:]
+    if not rows:
+        raise SheetError("去掉表头后补测表没有数据")
+
+    points: List[SheetPoint] = []
+    seen = set()
+    for i, row in enumerate(rows):
+        if len(row) != 4:
+            raise SheetError(
+                f"第 {i + 1} 行有 {len(row)} 列，补测表必须为 4 列："
+                "局部行, 局部列, 温度, 用途（参照/补测）")
+        r_token, c_token, t_token, p_token = (cell.strip() for cell in row)
+        try:
+            lr = int(r_token)
+            lc = int(c_token)
+        except ValueError:
+            raise SheetError(
+                f"第 {i + 1} 行的局部行列号 “{r_token},{c_token}” 不是整数")
+        if lr < 1 or lc < 1:
+            raise SheetError(
+                f"第 {i + 1} 行的局部行列号必须 >=1（补测表为 1 基编号）")
+        try:
+            temp = int(t_token)
+        except ValueError:
+            raise SheetError(
+                f"第 {i + 1} 行温度 “{t_token}” 不是整数，补测表只接受整数摄氏度")
+        if not (TEMP_MIN <= temp <= TEMP_MAX):
+            raise SheetError(
+                f"第 {i + 1} 行温度 {temp} 超出合理范围 "
+                f"[{TEMP_MIN}, {TEMP_MAX}] ℃")
+        purpose = p_token.lower()
+        if purpose in REF_TOKENS:
+            is_ref = True
+        elif purpose in FILL_TOKENS:
+            is_ref = False
+        else:
+            raise SheetError(
+                f"第 {i + 1} 行用途 “{p_token}” 无法识别，"
+                "只能填“参照”或“补测”（也接受 ref/fill）")
+        key = (lr, lc)
+        if key in seen:
+            raise SheetError(
+                f"局部坐标 ({lr},{lc}) 在补测表中重复出现，每个点只能出现一次")
+        seen.add(key)
+        points.append(SheetPoint(lr, lc, temp, is_ref))
+
+    if len(points) > MAX_SHEET_POINTS:
+        raise SheetError(f"补测表点数 {len(points)} 超过上限 {MAX_SHEET_POINTS}")
+    if not any(not p.is_ref for p in points):
+        raise SheetError("补测表至少要包含一个“补测”用途的点，全是参照点无法补测")
+    return points

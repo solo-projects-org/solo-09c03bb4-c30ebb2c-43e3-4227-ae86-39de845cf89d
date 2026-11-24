@@ -59,7 +59,76 @@
 </div>
 
 <div class="card">
-  <h2>③ 调整允许温差</h2>
+  <h2>③ 热像仪补测表对位（局部行列 → 炉壁落点）</h2>
+  <p class="muted">
+    补测表只有热像仪自身的局部行列号。填写搜索区起止行列并上传 4 列 CSV
+    （<b>局部行, 局部列, 整数温度, 用途</b>；用途填“参照”或“补测”，也接受 ref/fill；
+    首行可为表头）。系统在搜索区内枚举平移与 0°/90°/180°/270° 四种朝向（不做镜像）：
+    整组点必须全部落在区内，参照点必须与已有实测温度逐点相等；
+    <b>补测目标格是否已测不参与摆法筛选</b>。只有所有可行摆法给出同一组补测坐标和值时才预览；
+    无解或有多组落点时只说明原因。确认时会用最新实测重新核对，且目标格全部未测才整批填入。
+  </p>
+  <form action="{{ url_for('alignment_preview') }}" method="post"
+        enctype="multipart/form-data" class="row-form">
+    <div class="field"><label>搜索区起始行</label>
+      <input type="number" name="row_start" min="1" max="{{ n }}" value="1" required></div>
+    <div class="field"><label>搜索区结束行</label>
+      <input type="number" name="row_end" min="1" max="{{ n }}" value="{{ n }}" required></div>
+    <div class="field"><label>搜索区起始列</label>
+      <input type="number" name="col_start" min="1" max="{{ n }}" value="1" required></div>
+    <div class="field"><label>搜索区结束列</label>
+      <input type="number" name="col_end" min="1" max="{{ n }}" value="{{ n }}" required></div>
+    <div class="field"><label>补测表 CSV</label>
+      <input type="file" name="sheet" accept=".csv,text/csv" required></div>
+    <button type="submit">对位并预览</button>
+  </form>
+
+  {% if align_preview %}
+  {% set h = align_preview.head %}
+  <div class="preview-box">
+    <h3>当前对位预览
+      <span class="muted">（来源文件：{{ h.filename }}；生成于 {{ h.created_at }} UTC）</span>
+    </h3>
+    <p class="muted">
+      搜索区：行 {{ h.region_r0 + 1 }}..{{ h.region_r1 + 1 }}，
+      列 {{ h.region_c0 + 1 }}..{{ h.region_c1 + 1 }}；
+      可行摆法 <b>{{ h.placement_count }}</b> 种且补测落点唯一
+      （补测点 {{ align_preview.fills|length }} 个、参照点 {{ align_preview.refs|length }} 个）。
+      预览<b>尚未写入任何读数</b>；对位计算期间其他补测仍可正常入库，确认时将用最新实测重核，
+      若读数已变化或目标格被占用，整批拒绝并提示重新对位。
+    </p>
+    <div class="scroll" style="max-height:300px">
+      <table>
+        <tr><th>类别</th><th>炉壁行（1 基）</th><th>炉壁列（1 基）</th><th>温度（℃）</th><th>目标格现状</th></tr>
+        {% for (r, c, t) in align_preview.refs %}
+        <tr><td><span class="tag tag-ref">参照</span></td><td>{{ r + 1 }}</td><td>{{ c + 1 }}</td>
+            <td>{{ t }}</td><td class="muted">须与实测相等（已校验）</td></tr>
+        {% endfor %}
+        {% for (r, c, t) in align_preview.fills %}
+        <tr><td><span class="tag tag-fill">补测</span></td><td>{{ r + 1 }}</td><td>{{ c + 1 }}</td>
+            <td><b>{{ t }}</b></td>
+            <td>{% if cells_map.get((r, c)) is none %}<span class="ok-text">未测，可填入</span>
+                {% else %}<span class="err-text">现已实测 {{ cells_map.get((r, c)) }}，确认将被拦截</span>
+                {% endif %}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    <p class="muted" style="margin-bottom:6px">
+      注意：上表“目标格现状”按当前页面数据即时显示；最终以确认事务内的重核结果为准。
+    </p>
+    <form action="{{ url_for('alignment_confirm') }}" method="post" class="inline"
+          onsubmit="return confirm('确认用最新实测重核并整批填入上述补测点？');">
+      <button type="submit">重核通过则整批填入</button>
+    </form>
+    <form action="{{ url_for('alignment_cancel') }}" method="post" class="inline">
+      <button type="submit" class="secondary">放弃预览</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>④ 调整允许温差</h2>
   <form action="{{ url_for('tolerance') }}" method="post" class="row-form">
     <div class="field"><label>允许温差（℃）</label>
       <input type="number" name="tol" min="0" value="{{ grid.tol }}" required></div>
