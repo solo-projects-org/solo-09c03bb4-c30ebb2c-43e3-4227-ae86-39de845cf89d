@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}出错了 · 温度格网交接{% endblock %}
+{% block body %}
+<div class="card">
+  <h2>无法完成请求</h2>
+  <p>{{ message }}</p>
+  <p><a href="{{ url_for('index') }}"><button type="button">返回格网总览</button></a></p>
+</div>
+{% endblock %}

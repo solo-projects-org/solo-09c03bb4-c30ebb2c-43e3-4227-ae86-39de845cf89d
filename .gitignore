@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+instance/
+*.db
+*.db-wal
+*.db-shm
+.pytest_cache/
+# 本地无 pip 时用于自测的临时依赖目录，Docker 构建走 requirements.txt，不需要
+.pylibs/

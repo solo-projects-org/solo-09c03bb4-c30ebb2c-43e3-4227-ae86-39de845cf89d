@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pylibs/
+instance/
+*.db
+*.db-wal
+*.db-shm
+.git/
+tests/
+examples/

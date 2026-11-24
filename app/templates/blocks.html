@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}现行覆盖块 · 温度格网交接{% endblock %}
+{% block body %}
+<div class="card">
+  <h2>现行覆盖块（批次 #{{ batch.id }}，{{ batch.reason }}，温差 {{ batch.tol }} ℃）</h2>
+  <p class="muted">
+    共 {{ blocks|length }} 块，互不重叠且只覆盖实测格；每块给出最高温，
+    块内任一读数与最高温之差均不超过允许温差。行列号为 1 基。
+  </p>
+  <p>
+    <a href="{{ url_for('download') }}"><button type="button">下载本批供数 CSV</button></a>
+    <a href="{{ url_for('index') }}"><button type="button" class="secondary">返回格网总览</button></a>
+  </p>
+  <div class="scroll">
+  <table>
+    <tr>
+      <th>块号</th><th>起始行</th><th>起始列</th><th>边长</th>
+      <th>覆盖格数</th><th>最高温 (℃)</th><th>最低温 (℃)</th><th>块内温差 (℃)</th>
+    </tr>
+    {% for b in blocks %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ b.row + 1 }}</td>
+      <td>{{ b.col + 1 }}</td>
+      <td>{{ b.size }}</td>
+      <td>{{ b.count }}</td>
+      <td><b>{{ b.tmax }}</b></td>
+      <td>{{ b.tmin }}</td>
+      <td>{{ b.tmax - b.tmin }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>
+{% endblock %}

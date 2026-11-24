@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block body %}
+
+{% if not grid %}
+<div class="card">
+  <h2>① 上传测温方阵 CSV</h2>
+  <p class="muted">
+    要求：行列数相等且边长为 2 的幂（2、4、8、16、32、64、128、256、512）；
+    格内填整数摄氏度，空白单元格表示未测；UTF-8/GBK 编码均可；首行可为表头。
+  </p>
+  <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" class="row-form">
+    <div class="field">
+      <label for="csvfile">方阵 CSV</label>
+      <input type="file" id="csvfile" name="csvfile" accept=".csv,text/csv" required>
+    </div>
+    <div class="field">
+      <label for="tol">允许温差（℃）</label>
+      <input type="number" id="tol" name="tol" value="20" min="0" required>
+    </div>
+    <button type="submit">上传并核算</button>
+  </form>
+</div>
+{% else %}
+
+<div class="card">
+  <h2>格网概况 <span class="muted">（边长 {{ grid.side }}，行列为 1 基编号）</span></h2>
+  <span class="kv">现行批次：<b>#{{ batch.id if batch else '—' }}</b>（{{ batch.reason if batch else '' }}）</span>
+  <span class="kv">允许温差：<b>{{ grid.tol }} ℃</b></span>
+  <span class="kv">实测格：<b>{{ stats.measured }}</b> / {{ grid.side * grid.side }}</span>
+  <span class="kv">未测格：<b>{{ stats.unmeasured }}</b></span>
+  <span class="kv">温度区间：<b>{{ stats.tmin if stats.tmin is not none else '—' }} ~
+    {{ stats.tmax if stats.tmax is not none else '—' }} ℃</b></span>
+  <span class="kv">覆盖块数：<b>{{ stats.block_count }}</b></span>
+</div>
+
+<div class="card">
+  <h2>② 按行列号批量补测 / 清空</h2>
+  <p class="muted">
+    对指定矩形区域统一写入一个整数温度（补测）或清空（标记未测）。
+    提交后仅重算包含改动格的四叉树节点与覆盖块；整步在一个事务内，失败自动回滚，旧批次仍可下载。
+  </p>
+  <div class="row-form">
+    <form action="{{ url_for('edit') }}" method="post" class="row-form">
+      <div class="field"><label>起始行</label><input type="number" name="row_start" min="1" max="{{ n }}" value="1" required></div>
+      <div class="field"><label>结束行</label><input type="number" name="row_end" min="1" max="{{ n }}" value="1" required></div>
+      <div class="field"><label>起始列</label><input type="number" name="col_start" min="1" max="{{ n }}" value="1" required></div>
+      <div class="field"><label>结束列</label><input type="number" name="col_end" min="1" max="{{ n }}" value="1" required></div>
+      <div class="field"><label>操作</label>
+        <select name="mode" id="modeSel">
+          <option value="fill">补测（写入温度）</option>
+          <option value="clear">清空（标记未测）</option>
+        </select>
+      </div>
+      <div class="field" id="tempField"><label>温度（℃）</label>
+        <input type="number" name="temp" id="tempInput" value="0"></div>
+      <button type="submit">提交改动</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h2>③ 调整允许温差</h2>
+  <form action="{{ url_for('tolerance') }}" method="post" class="row-form">
+    <div class="field"><label>允许温差（℃）</label>
+      <input type="number" name="tol" min="0" value="{{ grid.tol }}" required></div>
+    <button type="submit" class="secondary">重新核算全部块</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>格网视图
+    {% if not show_full %}<span class="muted">（网格较大，仅预览前 {{ view_n }} 行 × {{ view_n }} 列；完整数据以批量操作和下载 CSV 为准）</span>{% endif %}
+  </h2>
+  <div class="scroll">
+  <table>
+    <tr><th>行\列</th>{% for c in range(view_n) %}<th>{{ c + 1 }}</th>{% endfor %}</tr>
+    {% for r in range(view_n) %}
+    <tr>
+      <th>{{ r + 1 }}</th>
+      {% for c in range(view_n) %}
+        {% set v = grid_rows[r][c] %}
+        {% if v is none %}<td class="empty">·</td>{% else %}<td>{{ v }}</td>{% endif %}
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  <p class="muted">“·”为未测格。覆盖块明细见
+    <a href="{{ url_for('blocks_view') }}">现行覆盖块</a> 页，或直接
+    <a href="{{ url_for('download') }}">下载供数 CSV</a>。</p>
+</div>
+
+<div class="card">
+  <h2>重新上传（整体替换）</h2>
+  <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" class="row-form">
+    <div class="field"><label>新方阵 CSV</label>
+      <input type="file" name="csvfile" accept=".csv,text/csv" required></div>
+    <div class="field"><label>允许温差（℃）</label>
+      <input type="number" name="tol" min="0" value="{{ grid.tol }}" required></div>
+    <button type="submit" class="danger">替换并重新核算</button>
+  </form>
+</div>
+{% endif %}
+
+<script>
+const sel = document.getElementById('modeSel');
+const tempField = document.getElementById('tempField');
+if (sel && tempField) {
+  const sync = () => { tempField.style.display = sel.value === 'clear' ? 'none' : ''; };
+  sel.addEventListener('change', sync); sync();
+}
+</script>
+{% endblock %}
